@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: payment
+  datasource:
+    url: ${DB_URL:jdbc:h2:file:./data/payment}
+    username: sa
+    password: ''
+  jpa:
+    hibernate.ddl-auto: update
+    open-in-view: false
+  h2.console.enabled: false
+  mvc.problemdetails.enabled: true
+management:
+  endpoints.web.exposure.include: health
