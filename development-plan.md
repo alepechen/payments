@@ -450,46 +450,33 @@ When two requests with the same key arrive at the same moment, the lookup in ste
 
 ```java
 public interface VendorGateway {
-    VendorPayment createPayout(UUID reference, long amount, String currency);
-    VendorPayment confirm(String vendorPaymentId);
-    VendorPayment get(String vendorPaymentId);
+    VendorResult<VendorPayment> createPayout(UUID reference, long amount, String currency);
+    VendorResult<VendorPayment> confirm(String vendorPaymentId);
+    VendorResult<VendorPayment> get(String vendorPaymentId);
 }
 ```
 
-- `HttpVendorGateway` uses a `RestClient` built from `RestClient.Builder` with `baseUrl(vendorBaseUrl)`:
-  ```java
-  VendorPayment createPayout(UUID ref, long amount, String currency) {
-      return restClient.post().uri(VendorPaths.PAYMENT)
-          .body(new CreatePayoutRequest(ref, amount, currency))
-          .retrieve()
-          .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> { throw new VendorUnavailableException(...); })
-          .onStatus(s -> s.value() == 422, (req, res) -> { throw new VendorRejectedException(...); })
-          .body(VendorPayment.class);
-  }
-  ```
-  Also catch `ResourceAccessException` (timeouts, connection refused) and turn it into `VendorUnavailableException`.
+- Expected outcomes are returned, not thrown, as a sealed `VendorResult` the worker switches over:
+  - `Success(payment)`: 2xx with a body.
+  - `Rejected(status, reason)`: a definitive business rejection, not retryable. 422, or a payment the vendor returns as `REJECTED`. For `get`, also 404 (unknown id).
+  - `Retryable(reason)`: 5xx, 408, timeouts, connection refused. Retried inline; if still returned, retries ran out.
+  - `Throttled(retryAfter, reason)`: vendor 429, our own rate limiter, or the circuit breaker is open. Not retried inline.
+  - Other 4xx (400, 401, 403, 409, a 404 on create/confirm) and unreadable bodies: a bug. `VendorIntegrationException` is thrown; store it in `lastError` and log it. Never treat these as a rejection: after `INITIATED` that would release a hold on money that may already be moving.
+- `VendorClient` implements it with a `RestClient` built from `RestClient.Builder` with `baseUrl(vendor.base-url)` (`VENDOR_BASE_URL` on Fly). It has no `onStatus` handlers: it catches `RestClientResponseException` / `ResourceAccessException` and classifies them.
 - `FakeVendorGateway` in tests, with scriptable responses: success, reject, unavailable N times.
-- Error categories:
-  - `VendorUnavailableException`: retryable.
-  - `VendorRejectedException`: a definitive business rejection, not retryable.
-  - Other 4xx responses: a bug. Store it in `lastError` and log it.
 - Timeouts: connect 2s, read 5s, configured on the request factory (`JdkClientHttpRequestFactory` or `SimpleClientHttpRequestFactory`).
 
-### 5.3 Fast retries and rate limit (Resilience4j)
+### 5.3 Fast retries, rate limit and circuit breaker (Resilience4j)
 
-```yaml
-resilience4j:
-  retry.instances.vendor:
-    max-attempts: 3
-    wait-duration: 200ms
-    retry-exceptions: [com.example.payment.vendor.VendorUnavailableException]
-  ratelimiter.instances.vendor:
-    limit-for-period: 10
-    limit-refresh-period: 1m
-    timeout-duration: 0 # don't block the worker; treat a refusal as "try later"
-```
+The policies are built in code in `VendorResilienceConfig` (no Resilience4j starter and no YAML), one shared instance of each:
 
-- Decorate each gateway call with the `RateLimiter` on the outside and the `Retry` inside, so every retry also uses a permit ("retries count too"). Programmatic decoration (`Decorators.ofSupplier(...)`) makes this order explicit. With annotations, check the aspect order.
+| Policy         | Settings                                                                                                   |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| Retry          | 3 attempts, exponential random back-off from 200ms; retries only `Retryable` results, never exceptions     |
+| RateLimiter    | 10 per 1m, timeout 0 (don't block the worker; a refusal is `Throttled`, try again in a few seconds)        |
+| CircuitBreaker | count-based window 10, min 5 calls, opens at 50% `Retryable`, 30s open, 2 half-open calls, auto half-open |
+
+- `VendorClient` decorates each call by hand, innermost to outermost: `CircuitBreaker` → `RateLimiter` → `Retry`. With `Retry` outermost, every attempt takes a permit ("retries count too") and is seen by the breaker. With the rate limiter outside the breaker, its refusals never count as calls.
 - Only idempotent calls are retried. Both vendor calls are idempotent by design: `reference` on create, and confirm is a no-op on repeat.
 - With a single `payment` machine, the per-JVM rate limiter really does mean 10 requests per minute to the vendor.
 
@@ -537,6 +524,8 @@ resilience4j:
 - **Vendor down during confirm** 20 times, then back up → eventually `COMPLETED`.
 - **Vendor rejects on confirm** → `RELEASE`, `DECLINED`.
 - **Crash simulation:** the fake gateway succeeds on create but the save throws → next tick → exactly one vendor payment, status `INITIATED`.
+- **TODO, vendor comes back:** vendor DOWN at create, so the payout stays pending (not declined). Vendor OK, then `worker.tick()` → `COMPLETED`.
+- **TODO, lost response:** `LOST_RESPONSE` mode on create (vendor applied it, app got a 503). Vendor OK, then `worker.tick()` → `COMPLETED`, and the vendor holds exactly one payment for that reference (needs a way to count payments, for example a `GET /admin/payments` in mock-vendor).
 - **Smoke test on Fly** (a `curl` script):
   1. Create a deposit via `/admin/deposits` (run with `fly ssh console` on `mock-vendor`, or temporarily expose it) and report it.
   2. Withdraw, then poll until `COMPLETED`.

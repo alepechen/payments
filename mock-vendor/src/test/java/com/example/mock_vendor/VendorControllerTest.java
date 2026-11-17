@@ -1,5 +1,6 @@
 package com.example.mock_vendor;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -8,7 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jayway.jsonpath.JsonPath;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -22,9 +23,9 @@ class VendorControllerTest {
 
     @Autowired MockMvc mvc;
 
-    @AfterEach
-    void resetChaos() throws Exception {
-        mvc.perform(post("/admin/chaos/OK"));
+    @BeforeEach
+    void resetVendor() throws Exception {
+        mvc.perform(post("/admin/reset"));   // also resets chaos to OK
     }
 
     private String createPayout(UUID reference) throws Exception {
@@ -42,7 +43,7 @@ class VendorControllerTest {
         UUID ref = UUID.randomUUID();
         String first = createPayout(ref);
         String second = createPayout(ref);
-        org.assertj.core.api.Assertions.assertThat(second).isEqualTo(first);
+        assertThat(second).isEqualTo(first);
     }
 
     @Test
