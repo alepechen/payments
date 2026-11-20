@@ -56,10 +56,11 @@ public class VendorClient implements VendorGateway {
 
     @Override
     public VendorResult<VendorPayment> createPayout(UUID ref, long amount, String currency) {
-        return withResilience(() -> rejectIfVendorRejected(send(restClient.post()
+        return withResilience(() -> rejectIfVendorRejected(requireMatch(send(restClient.post()
                 .uri(VendorPaths.PAYMENT)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(new CreatePayoutRequest(ref, amount, currency)), PAYOUT_REJECT_STATUSES)));
+                .body(new CreatePayoutRequest(ref, amount, currency)), PAYOUT_REJECT_STATUSES),
+                ref, amount, currency)));
     }
 
     @Override
@@ -158,5 +159,17 @@ public class VendorClient implements VendorGateway {
                 return DEFAULT_RETRY_AFTER;
             }
         }
+    }
+
+    /** The vendor must echo back what we sent. A mismatch is a bug, never a business "no". */
+    private static VendorResult<VendorPayment> requireMatch(
+            VendorResult<VendorPayment> result, UUID reference, long amount, String currency) {
+        if (result instanceof Success<VendorPayment>(VendorPayment p)
+                && (!reference.equals(p.reference()) || p.amount() != amount || !currency.equals(p.currency()))) {
+            throw new VendorIntegrationException("Vendor payment " + p.id() + " does not match what we sent: expected "
+                    + reference + "/" + amount + "/" + currency + ", got "
+                    + p.reference() + "/" + p.amount() + "/" + p.currency());
+        }
+        return result;
     }
 }

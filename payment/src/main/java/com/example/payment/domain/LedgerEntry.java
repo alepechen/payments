@@ -24,4 +24,16 @@ public class LedgerEntry {
         e.createdAt = Instant.now();
         return e;
     }
+
+    public Payment getPayment() {
+        return payment;
+    }
+
+    public LedgerEntryType getEntryType() {
+        return entryType;
+    }
+
+    public long getAmount() {
+        return amount;
+    }
 }

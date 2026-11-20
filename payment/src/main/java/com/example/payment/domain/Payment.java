@@ -69,6 +69,59 @@ public class Payment {
         }
         this.status = next;
         this.updatedAt = Instant.now();
+        this.nextAttemptAt = this.updatedAt;   // every status change makes the next step due immediately
+    }
+
+    /** CREATED -> HELD: funds reserved; the next step starts with a clean attempt count. */
+    public void markHeld() {
+        transitionTo(WithdrawalStatus.HELD);
+        this.attempts = 0;
+        this.lastError = null;
+    }
+
+    /** HELD -> INITIATED: the vendor accepted the payout. */
+    public void markInitiated(String vendorPaymentId) {
+        transitionTo(WithdrawalStatus.INITIATED);
+        this.vendorPaymentId = vendorPaymentId;
+        this.attempts = 0;
+        this.lastError = null;
+    }
+
+    /** CREATED -> DECLINED without touching money (no hold exists yet). */
+    public void decline(String reason) {
+        transitionTo(WithdrawalStatus.DECLINED);
+        this.lastError = reason;
+    }
+
+    /** A failed attempt: counts toward the limit and waits until {@code next}. */
+    public void recordRetry(String error, Instant next) {
+        this.attempts++;
+        this.lastError = error;
+        this.nextAttemptAt = next;
+        this.updatedAt = Instant.now();
+    }
+
+    /** We didn't get to try (throttled): wait until {@code next}, no attempt counted. */
+    public void deferUntil(Instant next, String reason) {
+        this.lastError = reason;
+        this.nextAttemptAt = next;
+        this.updatedAt = Instant.now();
+    }
+
+    public int getAttempts() {
+        return attempts;
+    }
+
+    public Instant getNextAttemptAt() {
+        return nextAttemptAt;
+    }
+
+    public String getLastError() {
+        return lastError;
+    }
+
+    public String getVendorPaymentId() {
+        return vendorPaymentId;
     }
 
     public UUID getId() {

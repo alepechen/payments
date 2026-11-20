@@ -10,5 +10,10 @@ spring:
     open-in-view: false
   h2.console.enabled: false
   mvc.problemdetails.enabled: true
+  task.scheduling.shutdown:
+    await-termination: true             # let the current worker tick finish on shutdown
+    await-termination-period: 15s       # longer than one step: 5s vendor read timeout + retries + DB tx
+  lifecycle.timeout-per-shutdown-phase: 20s
+server.shutdown: graceful               # let in-flight HTTP requests finish too
 management:
   endpoints.web.exposure.include: health

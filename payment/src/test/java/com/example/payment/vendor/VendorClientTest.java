@@ -70,6 +70,15 @@ class VendorClientTest {
     }
 
     @Test
+    void mismatchedAnswerIsAnIntegrationError() {
+        vendor.stubFor(post(urlPathEqualTo(CREATE)).willReturn(okJson(payment("CREATED"))));
+
+        assertThatThrownBy(() -> gateway().createPayout(ref, 999, "CAD"))
+                .isInstanceOf(VendorIntegrationException.class);
+        vendor.verify(1, postRequestedFor(urlPathEqualTo(CREATE)));
+    }
+
+    @Test
     void vendorRejectedStatusIsRejected() {
         vendor.stubFor(post(urlPathEqualTo(CREATE)).willReturn(okJson(payment("REJECTED"))));
 

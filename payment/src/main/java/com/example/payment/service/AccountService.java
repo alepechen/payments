@@ -33,15 +33,17 @@ public class AccountService {
                 LedgerEntry.of(account, payment, LedgerEntryType.DEPOSIT, payment.getAmount()));
     }
 
+    /** CREATED -> HELD: reserve the funds. A no-op if the payment is no longer CREATED. */
     @Transactional
     public void hold(UUID paymentId) {
-        Payment payment = loadWithdrawal(paymentId);
-        Account account = payment.getAccount();
+        PaymentGuard.reloadIfStatusIs(paymentRepository, paymentId, WithdrawalStatus.CREATED).ifPresent(payment -> {
+            Account account = payment.getAccount();
 
-        account.hold(payment.getAmount());               // checks available(), throws InsufficientFundsException
-        payment.transitionTo(WithdrawalStatus.HELD);     // throws IllegalStateTransitionException if not CREATED
-        ledgerEntryRepository.save(
-                LedgerEntry.of(account, payment, LedgerEntryType.HOLD, payment.getAmount()));
+            account.hold(payment.getAmount());           // checks available(), throws InsufficientFundsException
+            payment.markHeld();                          // -> HELD, attempts and lastError reset
+            ledgerEntryRepository.save(
+                    LedgerEntry.of(account, payment, LedgerEntryType.HOLD, payment.getAmount()));
+        });
     }
 
     /** INITIATED -> COMPLETED: money has left; remove it from balance and held. */
