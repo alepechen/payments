@@ -182,8 +182,8 @@ class DepositServiceTest {
     }
 
     private List<LedgerEntryType> entriesFor(String vendorPaymentId) {
-        return ledger.findAll().stream()
-                .filter(e -> vendorPaymentId.equals(e.getPayment().getVendorPaymentId()))
+        UUID paymentId = payments.findByVendorPaymentId(vendorPaymentId).orElseThrow().getId();
+        return ledger.findByPaymentId(paymentId).stream()
                 .map(LedgerEntry::getEntryType)
                 .toList();
     }

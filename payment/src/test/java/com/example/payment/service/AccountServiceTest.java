@@ -4,6 +4,7 @@ import com.example.payment.domain.Account;
 import com.example.payment.domain.Payment;
 import com.example.payment.domain.WithdrawalStatus;
 import com.example.payment.exception.InsufficientFundsException;
+import com.example.payment.repository.AccountRepository;
 import com.example.payment.repository.LedgerEntryRepository;
 import com.example.payment.repository.PaymentRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,13 +18,16 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Rolled back after each test, so the seeded account is untouched for other test classes. */
+/**
+ * Rolled back after each test. Uses its own fresh account, so committed money from other test
+ * classes (deposits) can't change the numbers here.
+ */
 @SpringBootTest
 @Transactional
 class AccountServiceTest {
 
     @Autowired AccountService accountService;
-    @Autowired AccountQueryService accounts;
+    @Autowired AccountRepository accountRepository;
     @Autowired PaymentRepository payments;
     @Autowired LedgerEntryRepository ledger;
 
@@ -31,7 +35,7 @@ class AccountServiceTest {
 
     @BeforeEach
     void depositThousand() {
-        account = accounts.current();
+        account = accountRepository.save(Account.open("test-" + UUID.randomUUID(), "USD"));   // fresh, isolated
         Payment deposit = payments.save(Payment.newDeposit(account, 1000, "USD", "vendor-" + UUID.randomUUID()));
         accountService.deposit(deposit.getId());
     }
@@ -40,7 +44,7 @@ class AccountServiceTest {
     void depositCreditsBalance() {
         assertThat(account.getBalance()).isEqualTo(1000);
         assertThat(account.available()).isEqualTo(1000);
-        assertThat(ledger.count()).isEqualTo(1);
+        assertThat(ledgerRowsForAccount()).isEqualTo(1);
     }
 
     @Test
@@ -59,7 +63,7 @@ class AccountServiceTest {
         assertThat(account.getBalance()).isEqualTo(900);
         assertThat(account.getHeld()).isZero();
         assertThat(account.available()).isEqualTo(900);
-        assertThat(ledger.count()).isEqualTo(3); // DEPOSIT, HOLD, SETTLE
+        assertThat(ledgerRowsForAccount()).isEqualTo(3); // DEPOSIT, HOLD, SETTLE
     }
 
     @Test
@@ -74,7 +78,7 @@ class AccountServiceTest {
         assertThat(account.getBalance()).isEqualTo(1000);
         assertThat(account.getHeld()).isZero();
         assertThat(account.available()).isEqualTo(1000);
-        assertThat(ledger.count()).isEqualTo(3); // DEPOSIT, HOLD, RELEASE
+        assertThat(ledgerRowsForAccount()).isEqualTo(3); // DEPOSIT, HOLD, RELEASE
     }
 
     @Test
@@ -89,5 +93,11 @@ class AccountServiceTest {
 
     private Payment newWithdrawal(long amount) {
         return payments.save(Payment.newWithdrawal(account, amount, "USD", "key-" + UUID.randomUUID()));
+    }
+
+    private long ledgerRowsForAccount() {
+        return ledger.findAll().stream()
+                .filter(e -> e.getPayment().getAccount().getId().equals(account.getId()))
+                .count();
     }
 }

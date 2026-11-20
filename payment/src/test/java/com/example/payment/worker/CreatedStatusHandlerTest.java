@@ -3,9 +3,9 @@ package com.example.payment.worker;
 import com.example.payment.domain.Account;
 import com.example.payment.domain.Payment;
 import com.example.payment.domain.WithdrawalStatus;
+import com.example.payment.repository.AccountRepository;
 import com.example.payment.repository.LedgerEntryRepository;
 import com.example.payment.repository.PaymentRepository;
-import com.example.payment.service.AccountQueryService;
 import com.example.payment.service.AccountService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,14 +17,17 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Rolled back after each test, so the seeded account is untouched for other test classes. */
+/**
+ * Rolled back after each test. Uses its own fresh account, so committed money from other test
+ * classes (deposits) can't change the numbers here.
+ */
 @SpringBootTest
 @Transactional
 class CreatedStatusHandlerTest {
 
     @Autowired CreatedStatusHandler handler;
     @Autowired AccountService accountService;
-    @Autowired AccountQueryService accounts;
+    @Autowired AccountRepository accountRepository;
     @Autowired PaymentRepository payments;
     @Autowired LedgerEntryRepository ledger;
 
@@ -32,7 +35,7 @@ class CreatedStatusHandlerTest {
 
     @BeforeEach
     void depositThousand() {
-        account = accounts.current();
+        account = accountRepository.save(Account.open("test-" + UUID.randomUUID(), "USD"));   // fresh, isolated
         Payment deposit = payments.save(Payment.newDeposit(account, 1000, "USD", "vendor-" + UUID.randomUUID()));
         accountService.deposit(deposit.getId());
     }
@@ -47,7 +50,7 @@ class CreatedStatusHandlerTest {
         assertThat(withdrawal.getAttempts()).isZero();
         assertThat(withdrawal.getLastError()).isNull();
         assertThat(account.getHeld()).isEqualTo(100);
-        assertThat(ledger.count()).isEqualTo(2); // DEPOSIT, HOLD
+        assertThat(ledgerRowsForAccount()).isEqualTo(2); // DEPOSIT, HOLD
     }
 
     @Test
@@ -59,7 +62,7 @@ class CreatedStatusHandlerTest {
         assertThat(withdrawal.getStatus()).isEqualTo(WithdrawalStatus.DECLINED);
         assertThat(withdrawal.getLastError()).isEqualTo("insufficient funds");
         assertThat(account.getHeld()).isZero();
-        assertThat(ledger.count()).isEqualTo(1); // DEPOSIT only
+        assertThat(ledgerRowsForAccount()).isEqualTo(1); // DEPOSIT only
     }
 
     @Test
@@ -72,10 +75,16 @@ class CreatedStatusHandlerTest {
         assertThat(withdrawal.getStatus()).isEqualTo(WithdrawalStatus.DECLINED);
         assertThat(withdrawal.getLastError()).isEqualTo("cancelled elsewhere");
         assertThat(account.getHeld()).isZero();
-        assertThat(ledger.count()).isEqualTo(1);
+        assertThat(ledgerRowsForAccount()).isEqualTo(1);
     }
 
     private Payment newWithdrawal(long amount) {
         return payments.save(Payment.newWithdrawal(account, amount, "USD", "key-" + UUID.randomUUID()));
+    }
+
+    private long ledgerRowsForAccount() {
+        return ledger.findAll().stream()
+                .filter(e -> e.getPayment().getAccount().getId().equals(account.getId()))
+                .count();
     }
 }

@@ -5,9 +5,9 @@ import com.example.payment.domain.LedgerEntry;
 import com.example.payment.domain.LedgerEntryType;
 import com.example.payment.domain.Payment;
 import com.example.payment.domain.WithdrawalStatus;
+import com.example.payment.repository.AccountRepository;
 import com.example.payment.repository.LedgerEntryRepository;
 import com.example.payment.repository.PaymentRepository;
-import com.example.payment.service.AccountQueryService;
 import com.example.payment.service.AccountService;
 import com.example.payment.service.WithdrawalService;
 import com.example.payment.vendor.FakeVendorGateway;
@@ -31,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Drives the handler directly: each call is one attempt, without waiting for nextAttemptAt.
- * Rolled back after each test, so the seeded account is untouched for other test classes.
+ * Rolled back after each test. Uses its own fresh account, so committed money from other test
+ * classes (deposits) can't change the numbers here.
  */
 @SpringBootTest
 @Transactional
@@ -42,7 +43,7 @@ class InitiatedStatusHandlerTest {
     @Autowired FakeVendorGateway vendor;
     @Autowired AccountService accountService;
     @Autowired WithdrawalService withdrawalService;
-    @Autowired AccountQueryService accounts;
+    @Autowired AccountRepository accountRepository;
     @Autowired PaymentRepository payments;
     @Autowired LedgerEntryRepository ledger;
 
@@ -53,7 +54,7 @@ class InitiatedStatusHandlerTest {
     @BeforeEach
     void depositThousandAndInitiateHundred() {
         vendor.reset();
-        account = accounts.current();
+        account = accountRepository.save(Account.open("test-" + UUID.randomUUID(), "USD"));   // fresh, isolated
         Payment deposit = payments.save(Payment.newDeposit(account, 1000, "USD", "vendor-" + UUID.randomUUID()));
         accountService.deposit(deposit.getId());
 
@@ -175,8 +176,7 @@ class InitiatedStatusHandlerTest {
     }
 
     private List<LedgerEntryType> entriesFor(Payment p) {
-        return ledger.findAll().stream()
-                .filter(e -> e.getPayment().getId().equals(p.getId()))
+        return ledger.findByPaymentId(p.getId()).stream()
                 .map(LedgerEntry::getEntryType)
                 .toList();
     }
