@@ -4,13 +4,10 @@ import com.example.payment.dto.CreateResult;
 import com.example.payment.dto.CreateWithdrawalRequest;
 import com.example.payment.exception.IdempotencyConflictException;
 import com.example.payment.repository.PaymentRepository;
-import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.dao.DataIntegrityViolationException;
 
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -93,24 +90,6 @@ class WithdrawalIdempotencyTest {
         } finally {
             pool.shutdownNow();
         }
-    }
-
-    @Test
-    void onlyIdempotencyConstraintCountsAsReplay() {
-        var idempotency = violation("PUBLIC.UQ_CLIENT_IDEMPOTENCY_KEY_INDEX_3 ON PUBLIC.PAYMENT(CLIENT_IDEMPOTENCY_KEY)");
-        var other = violation("CONSTRAINT_1");
-        var unnamed = violation(null);
-
-        assertThat(Constraints.isViolationOf(idempotency, Constraints.IDEMPOTENCY_KEY)).isTrue();
-        assertThat(Constraints.isViolationOf(other, Constraints.IDEMPOTENCY_KEY)).isFalse();
-        assertThat(Constraints.isViolationOf(unnamed, Constraints.IDEMPOTENCY_KEY)).isFalse();
-    }
-
-    /** Mirrors what Spring throws: a DataIntegrityViolationException wrapping Hibernate's ConstraintViolationException. */
-    private static DataIntegrityViolationException violation(String constraintName) {
-        var cause = new ConstraintViolationException(
-                "could not execute statement", new SQLException("violation"), constraintName);
-        return new DataIntegrityViolationException("could not execute statement", cause);
     }
 
     private long rowsWithKey(String key) {

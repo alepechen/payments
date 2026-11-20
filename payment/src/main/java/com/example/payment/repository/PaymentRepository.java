@@ -15,6 +15,8 @@ import java.util.UUID;
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByClientIdempotencyKey(String key);
 
+    Optional<Payment> findByVendorPaymentId(String vendorPaymentId);
+
     List<Payment> findTop10ByTypeAndStatusInAndNextAttemptAtBeforeOrderByNextAttemptAt(
             PaymentType type, Collection<WithdrawalStatus> statuses, Instant now);
 }

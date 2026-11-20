@@ -1,9 +1,13 @@
 package com.example.payment.controller;
 
+import com.example.payment.vendor.FakeVendorGateway;
+import com.example.payment.vendor.VendorResult;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -13,15 +17,25 @@ import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(FakeVendorGateway.Config.class)
 class ApiTests {
 
     @Autowired
     MockMvc mvc;
+
+    @Autowired
+    FakeVendorGateway vendor;
+
+    @BeforeEach
+    void resetVendor() {
+        vendor.reset();
+    }
 
     static final String WITHDRAWAL = """
             {"idempotencyKey":"key-12345","amount":100,"currency":"USD"}""";
@@ -91,11 +105,42 @@ class ApiTests {
     }
 
     @Test
-    void registerDepositIsNotImplemented() throws Exception {
+    void depositIsCreatedThenReplayed() throws Exception {
+        String vendorId = "payin-" + UUID.randomUUID();
+        vendor.givenPayin(vendorId, 500, "USD");
+        String body = """
+                {"vendorPaymentId":"%s"}""".formatted(vendorId);
+
+        String first = mvc.perform(post("/deposits").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("DEPOSIT"))
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.amount").value(500))
+                .andReturn().getResponse().getContentAsString();
+        String id = JsonPath.read(first, "$.id");
+
+        mvc.perform(post("/deposits").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id));
+    }
+
+    @Test
+    void unknownDepositIsUnprocessable() throws Exception {
         mvc.perform(post("/deposits").contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"vendorPaymentId":"v-1"}"""))
-                .andExpect(status().isNotImplemented());
+                                {"vendorPaymentId":"payin-%s"}""".formatted(UUID.randomUUID())))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    void throttledVendorIsServiceUnavailableWithRetryAfter() throws Exception {
+        vendor.onGet(new VendorResult.Throttled<>(java.time.Duration.ofSeconds(30), "429"));
+
+        mvc.perform(post("/deposits").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"vendorPaymentId":"payin-%s"}""".formatted(UUID.randomUUID())))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "30"));
     }
 
     @Test

@@ -9,12 +9,16 @@ import com.example.payment.dto.CreateWithdrawalRequest;
 import com.example.payment.exception.CurrencyMismatchException;
 import com.example.payment.exception.IdempotencyConflictException;
 import com.example.payment.exception.NotFoundException;
+import com.example.payment.repository.AccountRepository;
 import com.example.payment.repository.PaymentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -31,12 +35,16 @@ public class WithdrawalService {
 
     private final PaymentRepository payments;
     private final AccountQueryService accounts;
-    private final WithdrawalWriter writer;
+    private final AccountRepository accountRepository;
+    private final TransactionTemplate newTx;
 
-    public WithdrawalService(PaymentRepository payments, AccountQueryService accounts, WithdrawalWriter writer) {
+    public WithdrawalService(PaymentRepository payments, AccountQueryService accounts,
+                             AccountRepository accountRepository, PlatformTransactionManager txManager) {
         this.payments = payments;
         this.accounts = accounts;
-        this.writer = writer;
+        this.accountRepository = accountRepository;
+        this.newTx = new TransactionTemplate(txManager);
+        this.newTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /** Deliberately not {@code @Transactional}: the insert and the re-read each need their own transaction. */
@@ -54,13 +62,15 @@ public class WithdrawalService {
         }
 
         try {
-            // 2. Insert in its own transaction
-            return new CreateResult(writer.insert(account.getId(), request), true);
+            // 2. Insert in its own transaction; saveAndFlush makes the unique constraint fire here
+            Payment created = newTx.execute(tx -> payments.saveAndFlush(Payment.newWithdrawal(
+                    accountRepository.getReferenceById(account.getId()),
+                    request.amount(), request.currency(), key)));
+            return new CreateResult(created, true);
         } catch (DataIntegrityViolationException e) {
-            if (!Constraints.isViolationOf(e, Constraints.IDEMPOTENCY_KEY)) {
-                throw e;    // a real bug (FK, NOT NULL, CHECK): don't disguise it as a replay
-            }
-            // 3. Lost the race: the insert's transaction has rolled back, so this read is a fresh one
+            // 3. Lost the race on uq_client_idempotency_key: the insert's transaction has rolled back, so this read is a
+            //    fresh one. No row with our key means it was some other violation (FK, NOT NULL, CHECK):
+            //    orElseThrow rethrows it instead of disguising it as a replay.
             Payment winner = payments.findByClientIdempotencyKey(key).orElseThrow(() -> e);
             return replay(winner, request);
         }
